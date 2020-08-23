@@ -1,0 +1,287 @@
+---
+title: 'Predicting Product XYZ Test Modes with 99.9% Posterior Predictive Intervals,
+  A use case for time savings by implementing predictive analytics'
+author: "Logan Balaich"
+date: "8/22/2020"
+output: html_document
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Overview
+Product XYZ before this analysis would undergo extensive testing. For each kind of test there were also several modes to be tested for each test. You can think of it like unto the camera on your phone, it can take pictures using the front camera, the back camera, in portrait mode, landscape mode etc. Each of those modes on your phone camera is still taking a picture, but just in a different mode. For product XYZ each mode for each test has specification limits that must be met in order to pass the test. 
+
+The goal of this analysis is to provide insight as to which test modes can be predicted with a 99.9% probability of passing the remaining test modes within spec. Thus eliminating the need for testing Product XYZ in every mode for all tests. 
+
+Bayesian methods were used in conjunction with the supervised machine learning statistical package 'rstan' to provide these predictions. All predictions come with a 99.9% posterior predictive interval (also called a credible interval). 
+
+There are several tests for Product XYZ to pass to meet the quality standards required. This document and code will only show the analysis for one test. The exact same method was applied for all other tests. 
+
+
+## Test A
+For the Product XYZ test A consists of four modes (Mode 0, Mode 1, Mode 2 and Mode 3).
+The analysis method is to take observed data from Mode 0 and see how well we can predict Modes 1, 2, and 3. 
+
+```{r read in data, include=TRUE}
+# Bayesian approach to the Product XYZ
+fullData <- read.csv('Product_XYZ.csv', header=TRUE)
+observedData <- fullData[,c(1,2,3,5,7,9,11,13,15,17,19,22,24,27,29,32,34,37)]
+InternalSpecs <- fullData[,c(1,2,4,6,8,10,12,14,16,18,20,21,23,25,26,28,30,31,33,35,36,38)]
+NoiseObservations <- observedData[,c(3,4,5,6,7,8,9,10)]
+TEST_A <- NoiseObservations[,c(1,3,5,7)]
+
+Mode0MeanTestA <- as.data.frame(mean(TEST_A$Mode_0_TEST_A_unit))
+names(Mode0MeanTestA) <- "Mode_0_TEST_A_unit"
+Mode0MinTestA <- as.data.frame(min(TEST_A$Mode_0_TEST_A_unit))
+names(Mode0MinTestA) <- "Mode_0_TEST_A_unit"
+Mode0MaxTestA <- as.data.frame(max(TEST_A$Mode_0_TEST_A_unit))
+names(Mode0MaxTestA) <- "Mode_0_TEST_A_unit"
+```
+```{r library and set seed, include=TRUE}
+library(rstan)
+library(bayesplot)
+library(ggplot2)
+library(coda)
+set.seed(4641) # set seed for reproducibility 
+```
+
+### Predicting Mode 1 Test A from Mode 0 Test A
+```{r Test A predict mode1, include=TRUE}
+N <- length(TEST_A$Mode_1_TEST_A_unit)
+y <- TEST_A$Mode_1_TEST_A_unit
+x <- TEST_A$Mode_0_TEST_A_unit
+stan_dat <- list(N=N, x=x, y=y)
+stanc('Product_XYZ_SLR.stan') # check to make sure the file is good 
+stan_model1 <- 'Product_XYZ_SLR.stan'
+fit <- stan(file = stan_model1, data = stan_dat, iter=2500, warmup=1000, chains=4)
+stan_hist(fit)
+samps <- extract(fit) #think of samps as the object that contains the posterior data 
+y_rep <- as.matrix(fit, pars = "y_rep")
+post <- as.matrix(fit)
+colnames(post)[1:100]
+sel <- grep("y_rep", colnames(post))
+ci99 <- matrix(NA, nrow = length(sel), ncol = 2)
+estimate99 <- matrix(NA, nrow = length(sel), ncol = 1)
+for (i in 1:length(sel)) {
+  ci99[i,] <- quantile(post[,sel[i]], prob = c(0.0005, 0.9995), names = FALSE)
+  estimate99[i,] <- quantile(post[,sel[i]], prob = c(.5), names = FALSE)
+}
+head(estimate99)
+head(ci99)
+ci99 <- as.data.frame(ci99)
+colnames(ci99) <- c("LowerBound", "UpperBound")
+estimate99 <- as.data.frame(estimate99)
+colnames(estimate99) <- c("Estimate")
+Mode0Actuals <- as.data.frame(x)
+colnames(Mode0Actuals) <- c("Mode0Actuals")
+Mode1Actuals <- as.data.frame(y)
+colnames(Mode1Actuals) <- c("Mode1Actuals")
+ppintervals99 <- as.data.frame(c(estimate99, ci99, Mode1Actuals, Mode0Actuals))
+ppintervals99Sorted <- ppintervals99[order(ppintervals99$Estimate),]
+CutOffRows <- ppintervals99Sorted[which(ppintervals99Sorted$UpperBound<InternalSpecs$Mode_1_TEST_A_Spec1[1]),]
+Mode0CutOff <- max(CutOffRows$Mode0Actuals)
+```
+The below scatterplot and correlation value shows there is a strong positive correlation between Mode 0 Test A and Mode 1 Test A. 
+```{r Initial Scatterplot and Correlation mode1, fig.align='center',fig.width = 12, echo=TRUE}
+plot( y ~ x, pch=20,
+    xlab="Mode 0 Test A", 
+    ylab="Mode 1 Test A", 
+    main="Scatter plot of Test A"
+  )
+cor(x,y) #This is the correlation value between Mode 0 and Mode 1 of Test A
+```
+From Mode 0 data a model was constructed to provide Mode 1 Test A predictions with a 99.9% posterior predictive interval. Below is a graph which takes the data points from the previous scatter plot and overlays it with predictions and the predictive intervals. 
+```{r Final plot mode1, fig.align='center',fig.width = 12, fig.height=9, echo=TRUE }
+color_scheme_set("mix-brightblue-green")
+ppc_intervals(
+  y=y, 
+  x=x, 
+  yrep=y_rep, 
+  prob=0.999, 
+  size=1.5
+) + 
+  labs(
+    x="Mode 0 Test A", 
+    y="Mode 1 Test A", 
+    title="99.9% Posterior Predictive Intervals \nOverlay on Actual Observations", 
+    caption="Y values are the actual observed data (in dark blue). 
+    \nYrep values are the predicted values (in light blue).
+    \n99.9% Posterior Predictive Intervals (Credible Intervals) are in green."
+  )  + 
+  hline_at(InternalSpecs$Mode_1_TEST_A_Spec1[1], linetype=2,size=1, col="firebrick3") +
+  annotate(geom="text", x=17.7, y=12.815, label="Upper Spec Limit for Mode 1", col="firebrick3", fontface="italic") +
+  annotate("rect", xmin=Mode0CutOff[1], xmax=18.78, ymin=12.8, ymax=12.85, alpha = .07,
+           col="firebrick3", fill="firebrick3") +
+  panel_bg(fill = "gray92", color = NA) 
+```
+From this plot we see there are a few predictive intervals which go above spec, therefore a cutoff value has been calculated so we know exactly at which point our 99.9% probability of staying within spec will end. 
+<br />  
+<br />   
+Cutoff value: 
+```{r Test A mode1 predict cutoff value}
+Mode0CutOff
+```
+### Interpretation 
+For any Product XYZ that has a Mode 0 Test A value greater than or equal to the minimum observed value and less than or equal to the cutoff value (17.62277, 18.54414) there is a 99.9% probability that the Test A test for Mode 1 will be within spec. 94.2% of the Product XYZs were within the minimum observed value of 17.62277 and the cutoff value of 18.54414 This means that 5.8% of the product XYZ's, only those with a Mode 0 Test A greater than 18.54414, would need to be tested for Mode 1 Test A. 
+
+### Predicting Mode 2 Test A from Mode 0 Test A
+```{r Test A predict mode2, include=TRUE}
+N <- length(TEST_A$Mode_0_TEST_A_unit)
+# y value is what needs to be changed each time with each new mode looked at 
+y <- TEST_A$Mode_2_TEST_A_unit
+x <- TEST_A$Mode_0_TEST_A_unit
+stan_dat <- list(N=N, x=x, y=y)
+stanc('Product_XYZ_SLR.stan') # check to make sure the file is good 
+stan_model1 <- 'Product_XYZ_SLR.stan'
+fit <- stan(file = stan_model1, data = stan_dat, iter=2500, warmup=1000, chains=4)
+samps <- extract(fit) #think of samps as the object that contains the posterior data 
+y_rep <- as.matrix(fit, pars = "y_rep")
+
+post <- as.matrix(fit)
+#colnames(post)[1:100]
+sel <- grep("y_rep", colnames(post))
+ci99 <- matrix(NA, nrow = length(sel), ncol = 2)
+estimate99 <- matrix(NA, nrow = length(sel), ncol = 1)
+for (i in 1:length(sel)) {
+  ci99[i,] <- quantile(post[,sel[i]], prob = c(0.0005, 0.9995), names = FALSE)
+  estimate99[i,] <- quantile(post[,sel[i]], prob = c(.5), names = FALSE)
+}
+head(estimate99)
+head(ci99)
+ci99 <- as.data.frame(ci99)
+colnames(ci99) <- c("LowerBound", "UpperBound")
+estimate99 <- as.data.frame(estimate99)
+colnames(estimate99) <- c("Estimate")
+Mode0Actuals <- as.data.frame(x)
+colnames(Mode0Actuals) <- c("Mode0Actuals")
+### below line needs to be edited with each new mode looked ed 
+Mode2Actuals <- as.data.frame(y)
+colnames(Mode2Actuals) <- c("Mode2Actuals")
+# change name of the actuals df being combined into and being predicted, otherwise will keep old data
+ppintervals99 <- as.data.frame(c(estimate99, ci99, Mode2Actuals, Mode0Actuals))
+OutOfSpec <- ppintervals99[ which(ppintervals99$UpperBound>InternalSpecs$Mode_2_TEST_A_Spec1[1]),]
+dim(OutOfSpec)[1]
+1 - (dim(OutOfSpec)[1]/dim(ppintervals99)[1])
+ppintervals99Sorted <- ppintervals99[order(ppintervals99$Estimate),]
+CutOffRows <- ppintervals99Sorted[which(ppintervals99Sorted$UpperBound<InternalSpecs$Mode_2_TEST_A_Spec1[1]),]
+Mode0CutOff <- max(CutOffRows$Mode0Actuals)
+```
+The below scatterplot and correlation value shows there is a strong positive correlation between Mode 0 Test A and Mode 2 Test A. 
+```{r Initial Scatterplot and Correlation mode2, fig.align='center',fig.width = 12, echo=TRUE}
+plot( y ~ x, pch=20,
+    xlab="Mode 0 Test A", 
+    ylab="Mode 2 Test A", 
+    main="Scatter plot of Test A"
+  )
+cor(x,y) #This is the correlation value between Mode 0 and Mode 2 of Test A
+```
+From Mode 0 data a model was constructed to provide Mode 2 Test A predictions with a 99.9% posterior predictive interval. Below is a graph which takes the data points from the previous scatter plot and overlays it with predictions and the predictive intervals. 
+```{r Final plot mode2, fig.align='center',fig.width = 12, fig.height=9, echo=TRUE }
+color_scheme_set("mix-brightblue-green")
+#color_scheme_set("viridis")
+ppc_intervals(
+  y=y, 
+  x=x, 
+  yrep=y_rep, 
+  prob=0.999, 
+  size=1.5
+) + 
+  labs(
+    x="Mode 0 Test A", 
+    y="Mode 2 Test A", 
+    title="99.9% Posterior Predictive Intervals \nOverlay on Actual Observations", 
+    caption="Y values are the actual observed data (in dark blue).
+    \nYrep values are the predicted values (in light blue).
+    \n99.9% Posterior Predictive Intervals (Credible Intervals) are in green."
+  ) + 
+  hline_at(InternalSpecs$Mode_2_TEST_A_Spec1[1], linetype=2,size=1, col="firebrick3") +
+  annotate(geom="text", x=17.7, y=50.25, label="Upper Spec Limit for Mode 2", col="firebrick3", fontface="italic")+
+  annotate("rect", xmin=Mode0CutOff[1], xmax=18.78, ymin=InternalSpecs$Mode_2_TEST_A_Spec1[1],
+           ymax=50.4, alpha = .07, col="firebrick3", fill="firebrick3") 
+
+``` 
+From this plot we see there are a few predictive intervals which go above spec, therefore a cutoff value has been calculated so we know exactly at which point our 99.9% probability of staying within spec will end. 
+<br />  
+<br />   
+Cutoff value: 
+```{r Test A mode2 predict cutoff value}
+Mode0CutOff
+```
+### Interpretation 
+For any Product XYZ that has a Mode 0 Test A value greater than or equal to the minimum observed value and less than or equal to the cutoff value (17.62277, 18.69613) there is a 99.9% probability that the Test A test for Mode 2 will be within spec. 98.7% of the Product XYZs were within the minimum observed value of 17.62277 and the cutoff value of 18.69613. This means that 1.3% of the product XYZ's, only those with a Mode 0 Test A greater than 18.69613, would need to be tested for Mode 2 Test A. 
+
+### Predicting Mode 3 Test A from Mode 0 Test A
+```{r Test A predict mode3, include=TRUE}
+N <- length(TEST_A$Mode_0_TEST_A_unit)
+# y value is what needs to be changed each time with each new mode looked at 
+y <- TEST_A$Mode_3_TEST_A_unit
+x <- TEST_A$Mode_0_TEST_A_unit
+stan_dat <- list(N=N, x=x, y=y)
+stanc('Product_XYZ_SLR.stan') # check to make sure the file is good 
+stan_model1 <- 'Product_XYZ_SLR.stan'
+
+fit <- stan(file = stan_model1, data = stan_dat, iter=2500, warmup=1000, chains=4)
+samps <- extract(fit) #think of samps as the object that contains the posterior data 
+y_rep <- as.matrix(fit, pars = "y_rep")
+
+post <- as.matrix(fit)
+sel <- grep("y_rep", colnames(post))
+ci99 <- matrix(NA, nrow = length(sel), ncol = 2)
+estimate99 <- matrix(NA, nrow = length(sel), ncol = 1)
+for (i in 1:length(sel)) {
+  ci99[i,] <- quantile(post[,sel[i]], prob = c(0.0005, 0.9995), names = FALSE)
+  estimate99[i,] <- quantile(post[,sel[i]], prob = c(.5), names = FALSE)
+}
+head(estimate99)
+head(ci99)
+ci99 <- as.data.frame(ci99)
+colnames(ci99) <- c("LowerBound", "UpperBound")
+estimate99 <- as.data.frame(estimate99)
+colnames(estimate99) <- c("Estimate")
+Mode0Actuals <- as.data.frame(x)
+colnames(Mode0Actuals) <- c("Mode0Actuals")
+### below line needs to be edited with each new mode looked ed 
+Mode3Actuals <- as.data.frame(y)
+colnames(Mode3Actuals) <- c("Mode3Actuals")
+# change name of the actuals df being combined into and being predicted, otherwise will keep old data
+ppintervals99 <- as.data.frame(c(estimate99, ci99, Mode3Actuals, Mode0Actuals))
+head(ppintervals99)
+dim(ppintervals99)[1]
+OutOfSpec <- ppintervals99[ which(ppintervals99$UpperBound>InternalSpecs$Mode_3_TEST_A_Spec1[1]),]
+```
+The below scatterplot and correlation value shows there is a strong positive correlation between Mode 0 Test A and Mode 3 Test A. 
+```{r Initial Scatterplot and Correlation mode3, fig.align='center',fig.width = 12, echo=TRUE}
+plot( y ~ x, pch=20,
+    xlab="Mode 0 Test A", 
+    ylab="Mode 3 Test A", 
+    main="Scatter plot of Test A"
+  )
+cor(x,y) #This is the correlation value between Mode 0 and Mode 3 of Test A
+```
+From Mode 0 data a model was constructed to provide Mode 3 Test A predictions with a 99.9% posterior predictive interval. Below is a graph which takes the data points from the previous scatter plot and overlays it with predictions and the predictive intervals. 
+```{r Final plot mode3, fig.align='center',fig.width = 12, fig.height=9, echo=TRUE }
+color_scheme_set("mix-brightblue-green")
+#color_scheme_set("viridis")
+ppc_intervals(
+  y=y, 
+  x=x, 
+  yrep=y_rep, 
+  prob=0.999, 
+  size=1.5
+) + 
+  labs(
+    x="Mode 0 Test A", 
+    y="Mode 3 Test A", 
+    title="99.9% Posterior Predictive Intervals \nOverlay on Actual Observations", 
+    caption="Y values are the actual observed data (in dark blue).
+    \nYrep values are the predicted values (in light blue).
+    \n99.9% Posterior Predictive Intervals (Credible Intervals) are in green."
+  ) + 
+  hline_at(InternalSpecs$Mode_3_TEST_A_Spec1[1], linetype=2,size=1, col="firebrick3") +
+  annotate(geom="text", x=17.7, y=19.6, label="Upper Spec Limit for Mode 3", col="firebrick3", fontface="italic")
+
+```
+### Interpretation 
+For any Product XYZ that has a Mode 0 Test A value greater than or equal to the minimum observed value and less than or equal to the maximum observed value (17.62277, 18.74565) there is a 99.9% probability that the Test A test for Mode 3 will be within spec.
